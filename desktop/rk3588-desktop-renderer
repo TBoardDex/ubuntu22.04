@@ -1,0 +1,64 @@
+#!/bin/bash
+# Configure the next GDM/session start; never terminate a live desktop.
+set -euo pipefail
+usage()
+{
+    echo "Usage: rk3588-desktop-renderer mali|software (as root) | rk3588-desktop-renderer status"
+}
+mode=${1:-status}
+case "$mode" in
+    status)
+        printf 'Configured renderer (next login): '
+        cat /etc/rockchip-desktop-renderer 2>/dev/null || echo software
+        echo 'Check GLES in the desktop terminal: rk3588-render-env glmark2-es2'
+        exit 0 ;;
+    mali|software) ;;
+    *) usage >&2; exit 1 ;;
+esac
+[[ $# == 1 && $EUID == 0 ]] || { usage >&2; exit 1; }
+if [[ "$mode" == mali ]]; then
+    [[ -x /opt/rockchip/xserver/bin/Xorg &&
+       -x /usr/bin/Xorg.distrib &&
+       -r /usr/lib/aarch64-linux-gnu/mali/libEGL.so.1 &&
+       -r /usr/lib/aarch64-linux-gnu/mali/libGLESv2.so.2 &&
+       -r /usr/lib/aarch64-linux-gnu/mali/libgbm.so.1 ]] || {
+        echo "Mali backend is not installed; rebuild Desktop with UBUNTU_DESKTOP_GPU=mali." >&2
+        exit 1
+    }
+    accel=glamor
+else
+    accel=none
+fi
+mkdir -p /etc/X11/xorg.conf.d /etc/systemd/system/gdm.service.d
+cat > /etc/X11/xorg.conf.d/20-rockchip-modesetting.conf <<XORG
+Section "Device"
+    Identifier "Rockchip Display"
+    Driver "modesetting"
+    Option "AccelMethod" "$accel"
+    Option "DRI" "2"
+    Option "SWcursor" "true"
+EndSection
+XORG
+# EnvironmentFile is read again on every GDM start. PAM covers the user and
+# greeter sessions; the Shell wrapper additionally covers systemd activation.
+if [[ "$mode" == mali ]]; then
+    cat > /etc/rockchip-renderer.env <<'ENV'
+LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu/mali
+COGL_DRIVER=gles2
+COGL_RENDERER=EGL_XLIB
+ENV
+else
+    cat > /etc/rockchip-renderer.env <<'ENV'
+LIBGL_ALWAYS_SOFTWARE=1
+GALLIUM_DRIVER=llvmpipe
+ENV
+fi
+cat > /etc/systemd/system/gdm.service.d/20-rockchip-renderer.conf <<'UNIT'
+[Service]
+EnvironmentFile=/etc/rockchip-renderer.env
+UNIT
+touch /etc/environment
+sed -i -E '/^[[:space:]]*(LD_LIBRARY_PATH|LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER|COGL_DRIVER|COGL_RENDERER)=/d' /etc/environment
+cat /etc/rockchip-renderer.env >> /etc/environment
+printf '%s\n' "$mode" > /etc/rockchip-desktop-renderer
+echo "Selected $mode for the next login. Save desktop work, then reboot from serial."

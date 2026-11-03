@@ -1,0 +1,279 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+# AIC protocol constants and PTA parameters adapted from AIC Corporation's
+# libbt/8800/src/aic_hardware.c, Copyright (C) 2019-2027 AIC Corporation.
+# Linux UART/BlueZ integration for the TBoard SDK. See ../README.bluetooth.md.
+"""Initialize an SDIO-firmware-backed AIC8800 UART and retain its H4 attachment."""
+import argparse
+import configparser
+import fcntl
+import hashlib
+import os
+from pathlib import Path
+import re
+import select
+import signal
+import socket
+import struct
+import sys
+import termios
+import time
+
+
+SDIO_IDS = {(0x5449, 0x0145), (0x5449, 0x0146), (0xc8a1, 0xc08d),
+            (0xc8a1, 0x0082), (0xc8a1, 0x0182)}
+N_HCI = 15
+HCIUARTSETPROTO = 0x400455c8
+HCIUARTGETDEVICE = 0x800455ca
+# The vendor sends a 36-byte update-config command. Its PTA struct is 22
+# bytes; initialize the remaining reserved bytes rather than leaking memory.
+PTA_CONFIG = (struct.pack("<HH4B9H", 0x0b, 22, 1, 1, 0, 0,
+                          0x135, 0xbc, 0x4e, 0x27, 0x9c, 0x6d,
+                          3000, 0x1450, 0xc50)).ljust(36, b"\0")
+
+
+def log(message):
+    print("aic8800-bt: " + message, flush=True)
+
+
+class H4:
+    def __init__(self, fd, timeout):
+        self.fd = fd
+        self.timeout = timeout
+
+    def read(self, size, deadline):
+        data = bytearray()
+        while len(data) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([self.fd], [], [], remaining)[0]:
+                raise TimeoutError("HCI response timeout; check SDIO firmware, UART baud/RTS/CTS and BT power")
+            try:
+                chunk = os.read(self.fd, size - len(data))
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise OSError("UART disconnected")
+            data.extend(chunk)
+        return bytes(data)
+
+    def command(self, opcode, payload=b""):
+        if len(payload) > 255:
+            raise ValueError("HCI command parameters exceed 255 bytes")
+        log("command 0x%04x (%d bytes)" % (opcode, len(payload)))
+        packet = b"\x01" + struct.pack("<HB", opcode, len(payload)) + payload
+        deadline = time.monotonic() + self.timeout
+        while packet:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([], [self.fd], [], remaining)[1]:
+                raise TimeoutError("HCI command write timeout (check RTS/CTS)")
+            try:
+                count = os.write(self.fd, packet)
+            except BlockingIOError:
+                continue
+            packet = packet[count:]
+        while True:
+            kind = self.read(1, deadline)[0]
+            if kind == 4:
+                event, length = self.read(2, deadline)
+                data = self.read(length, deadline)
+                if event == 0x0e and len(data) >= 4:
+                    received = struct.unpack_from("<H", data, 1)[0]
+                    if received == opcode:
+                        if data[3]:
+                            raise OSError("HCI command 0x%04x failed: status 0x%02x" % (opcode, data[3]))
+                        return data[4:]
+                elif event == 0x0f and len(data) >= 4:
+                    if struct.unpack_from("<H", data, 2)[0] == opcode and data[0]:
+                        raise OSError("HCI command 0x%04x rejected: status 0x%02x" % (opcode, data[0]))
+            elif kind in (2, 3, 5):
+                header = self.read(3 if kind == 3 else 4, deadline)
+                length = header[2] if kind == 3 else struct.unpack_from("<H", header, 2)[0]
+                self.read(length & (0x3fff if kind == 5 else 0xffff), deadline)
+            else:
+                raise OSError("Invalid H4 packet 0x%02x; check UART baud/flow control" % kind)
+
+
+def parse_address(value):
+    if not re.fullmatch(r"[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}", value):
+        raise ValueError("bdaddr must have the form XX:XX:XX:XX:XX:XX")
+    result = bytes.fromhex(value.replace(":", ""))
+    if result in (b"\0" * 6, b"\xff" * 6) or result[0] & 1:
+        raise ValueError("bdaddr must be a nonzero unicast address")
+    return result
+
+
+def stable_address():
+    # Prefer immutable board identity. Never distribute one shared MAC in an image.
+    for name in ("/sys/firmware/devicetree/base/serial-number", "/etc/machine-id"):
+        try:
+            identity = Path(name).read_bytes().strip(b"\0\r\n ")
+        except FileNotFoundError:
+            continue
+        if identity and identity.strip(b"0") and identity.lower() not in (b"unknown", b"none"):
+            return b"\x02" + hashlib.sha256(b"tboard-aic8800-bt:" + identity).digest()[:5]
+    raise OSError("No board serial or initialized machine-id; configure a unique bdaddr")
+
+
+def initialize(hci, address="", configure_pta=True, probe=False):
+    # SDIO BSP already loaded ADID/PATCH/TABLE and configured 1.5M H4.
+    # Follow the vendor's default path (bt_rf_need_config=false): reset,
+    # address, PTA. Do not enter BT-only RF calibration or Android PCM/SCO.
+    hci.command(0x0c03)
+    version = hci.command(0x1001)
+    if len(version) != 8:
+        raise OSError("Invalid Read Local Version response")
+    log("controller version=" + version.hex())
+    current = hci.command(0x1009)
+    if len(current) != 6:
+        raise OSError("Invalid Read BD_ADDR response")
+    current = current[::-1]
+    if not probe:
+        defaults = (b"\0" * 6, b"\xff" * 6, bytes.fromhex("112233445566"))
+        wanted = parse_address(address) if address else (
+            stable_address() if current in defaults or current[0] & 1 else current)
+        if wanted != current:
+            hci.command(0xfc70, wanted[::-1])
+        if configure_pta:
+            hci.command(0xfc72, PTA_CONFIG)
+        current = wanted
+    log("BD_ADDR=" + ":".join("%02X" % byte for byte in current))
+
+
+def wait_for_firmware(device, seconds):
+    deadline = time.monotonic() + seconds
+    while True:
+        found = False
+        for entry in Path("/sys/bus/sdio/devices").glob("*"):
+            try:
+                pair = (int((entry / "vendor").read_text(), 16),
+                        int((entry / "device").read_text(), 16))
+                found |= pair in SDIO_IDS
+            except FileNotFoundError:
+                continue
+        if found and Path("/sys/module/aic8800_fdrv").is_dir() and Path(device).exists():
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("AIC SDIO device, aic8800_fdrv or %s not ready; inspect wifibt-init and dmesg" % device)
+        time.sleep(0.2)
+
+
+def unblock_platform_bt():
+    # Do not toggle the shared combo supply or reset/reload a running Wi-Fi driver.
+    for entry in Path("/sys/class/rfkill").glob("rfkill*"):
+        if (entry / "type").read_text().strip() != "bluetooth":
+            continue
+        if (entry / "name").read_text().strip() != "bt_default":
+            continue
+        if (entry / "state").read_text().strip() != "1":
+            (entry / "state").write_text("1\n")
+            time.sleep(0.2)
+
+
+def open_uart(device, baud):
+    fd = os.open(device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        fcntl.ioctl(fd, termios.TIOCEXCL)
+        attrs = termios.tcgetattr(fd)
+        attrs[0] = attrs[1] = attrs[3] = 0
+        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL | termios.CRTSCTS
+        attrs[4] = attrs[5] = getattr(termios, "B" + str(baud))
+        attrs[6][termios.VMIN] = 1
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        termios.tcflush(fd, termios.TCIOFLUSH)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def notify_ready(index):
+    address = os.environ.get("NOTIFY_SOCKET")
+    if address:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect("\0" + address[1:] if address.startswith("@") else address)
+            sock.sendall(("READY=1\nSTATUS=Attached hci%d over AIC8800 H4" % index).encode())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="/etc/aic8800-bluetooth.conf")
+    parser.add_argument("--check-config", action="store_true", help="Validate configuration without touching hardware")
+    parser.add_argument("--probe-only", action="store_true", help="Reset/read controller; do not configure or attach it")
+    args = parser.parse_args()
+    config = configparser.ConfigParser(interpolation=None)
+    if not config.read(args.config):
+        parser.error("cannot read " + args.config)
+    section = config["aic8800"]
+    device = section.get("device", "/dev/ttyS9")
+    baud = section.getint("baud", 1500000)
+    timeout = section.getfloat("command_timeout", 5)
+    wait = section.getfloat("wait_seconds", 30)
+    pta = section.getboolean("configure_pta", True)
+    address = section.get("bdaddr", "").strip()
+    if not re.fullmatch(r"/dev/ttyS[0-9]+", device):
+        parser.error("device must be an explicitly selected /dev/ttyS<n>")
+    if baud not in (115200, 921600, 1500000) or timeout <= 0 or wait < 0:
+        parser.error("invalid baud/timeouts; baud must match the BSP firmware configuration")
+    if address:
+        parse_address(address)
+    if args.check_config:
+        log("config valid: %s, %d, RTS/CTS, PTA=%s" % (device, baud, pta))
+        return
+    if os.geteuid() != 0:
+        parser.error("root is required for UART HCI attachment")
+    port = device.rsplit("/", 1)[1]
+    if any(token.split(",")[0] == "console=" + port
+           for token in Path("/proc/cmdline").read_text().split()):
+        raise OSError("Refusing to attach the kernel console UART")
+    # Lock also protects manual foreground/probe calls from a running service.
+    run = Path("/run/aic8800-bluetooth")
+    run.mkdir(mode=0o755, exist_ok=True)
+    with (run / "uart.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        wait_for_firmware(device, wait)
+        unblock_platform_bt()
+        log("opening %s at %d, RTS/CTS enabled" % (device, baud))
+        fd = open_uart(device, baud)
+        attached = False
+        stop = False
+
+        def shutdown(_signum, _frame):
+            nonlocal stop
+            stop = True
+
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
+        try:
+            initialize(H4(fd, timeout), address, pta, args.probe_only)
+            if args.probe_only or stop:
+                return
+            # HCIUARTSETPROTO takes an integer value, TIOCSETD a pointer to int.
+            fcntl.ioctl(fd, termios.TIOCSETD, struct.pack("i", N_HCI))
+            attached = True
+            fcntl.ioctl(fd, HCIUARTSETPROTO, 0)  # H4, with normal BlueZ management
+            index = fcntl.ioctl(fd, HCIUARTGETDEVICE, 0)
+            log("attached hci%d; waiting for BlueZ" % index)
+            notify_ready(index)
+            while not stop:
+                # HUP/ERR/NVAL indicate UART removal; do not consume kernel H4 data.
+                poll = select.poll()
+                poll.register(fd, 0)
+                if poll.poll(1000):
+                    raise OSError("UART was removed or hung up")
+        finally:
+            if attached:
+                try:
+                    fcntl.ioctl(fd, termios.TIOCSETD, struct.pack("i", 0))
+                except OSError:
+                    pass
+            os.close(fd)
+            log("UART closed")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, configparser.Error) as error:
+        log("ERROR: " + str(error))
+        sys.exit(1)

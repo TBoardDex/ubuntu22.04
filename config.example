@@ -1,0 +1,9 @@
+# Copy to config.local before building. This is sourced as a shell script.
+# Built-in login accounts are root/root and tboard/tboard in both editions.
+# The SDK's shared account hook sets these; no per-edition account overrides.
+UBUNTU_CONSOLE=ttyFIQ0
+# Ubuntu 22.04 (jammy) only; edition is selected by the SDK defconfig/menuconfig.
+# Desktop: Ubuntu GNOME + GDM3 on Xorg (Wayland disabled).
+# Desktop defaults to mali (GLES2). Use software for recovery.
+# SDK builds prefer menuconfig's RK_UBUNTU_DESKTOP_GPU over this setting.
+# UBUNTU_DESKTOP_GPU=mali

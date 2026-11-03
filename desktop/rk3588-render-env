@@ -1,0 +1,5 @@
+#!/bin/sh
+# Also used after ssh-agent and by GNOME Shell's systemd user service.
+set -eu
+. /usr/local/lib/tboard/render-env.sh
+exec "$@"

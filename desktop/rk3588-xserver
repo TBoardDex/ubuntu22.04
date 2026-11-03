@@ -1,0 +1,15 @@
+#!/bin/sh
+# GDM calls /usr/bin/Xorg, diverted to this launcher by setup-gpu.sh.
+set -eu
+. /usr/local/lib/tboard/render-env.sh
+if [ "$(cat /etc/rockchip-desktop-renderer 2>/dev/null)" = mali ]; then
+    if [ ! -c /dev/mali0 ]; then
+        echo "rk3588-xserver: /dev/mali0 is missing; use rk3588-desktop-renderer software to recover." >&2
+        exit 1
+    fi
+    exec /opt/rockchip/xserver/bin/Xorg \
+        -modulepath /opt/rockchip/xserver/lib/xorg/modules,/usr/lib/xorg/modules "$@"
+else
+    # Never recurse through /usr/bin/Xorg after the diversion.
+    exec /usr/bin/Xorg.distrib "$@"
+fi

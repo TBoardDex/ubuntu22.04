@@ -1,0 +1,21 @@
+[Unit]
+Description=AIC8800 SDIO firmware and UART H4 Bluetooth attachment
+Wants=wifibt-init.service
+After=wifibt-init.service
+Before=bluetooth.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+ConditionPathExists=/etc/aic8800-bluetooth.conf
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 -B /usr/bin/aic8800-bt-attach --config /etc/aic8800-bluetooth.conf
+RuntimeDirectory=aic8800-bluetooth
+TimeoutStartSec=60
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

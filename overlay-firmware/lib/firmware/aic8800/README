@@ -1,0 +1,10 @@
+Aicsemi SDIO firmware, copied without binary changes from:
+https://github.com/radxa-pkg/aic8800
+revision 75fd5545a3e7a8ec2c2b022f0088cc352ad2b623
+src/SDIO/driver_fw/fw/{aic8800,aic8800DC,aic8800D80}
+
+post-wifibt.sh installs files from all three subdirectories into
+/lib/firmware/aic8800. Filenames are distinct. The driver selects firmware
+based on the chip ID and silicon revision. Some early revisions need
+additional firmware not included in this vendor release.
+See UPSTREAM-COPYRIGHT for the original repository packaging notice.

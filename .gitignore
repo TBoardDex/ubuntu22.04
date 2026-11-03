@@ -1,0 +1,11 @@
+/config.local
+/work/
+/cache/
+/rootfs/
+/output/
+/*.img
+/*.ext4
+__pycache__/
+*.py[cod]
+README.md.bak-20261106
+README.md.bak2-20261106

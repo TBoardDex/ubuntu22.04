@@ -1,0 +1,3 @@
+#!/bin/sh
+# PAM runs this renderer on the board at each serial or SSH login.
+exec /usr/bin/python3 /usr/lib/tboard/motd.py
