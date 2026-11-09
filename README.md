@@ -1,7 +1,7 @@
 # RK3588S TBoard Ubuntu 根文件系统
 
 本目录构建 TBoard (RK3588S) 的 Ubuntu 22.04 (jammy) ARM64 根文件系统，
-提供 Server、Desktop 两种形态，共用 SDK 的 U-Boot、内核（Linux 5.10.226）和 `rk3588s-TBoard.dts`。
+提供 Server、Desktop 两种形态，共用 SDK 的 U-Boot、内核（Linux 5.10.226）和 `rk3588s-TBoard-R5A.dts`。
 
 | 形态 | 内容 | 默认启动目标 |
 | --- | --- | --- |
@@ -16,16 +16,16 @@ PulseAudio、pavucontrol、gnome-control-center 等。板载 AIC8800 SDIO WiFi�
 
 推荐从 SDK 根目录构建（切换 defconfig 会重置 SDK 配置，已有自定义设置先备份 `output/.config`）：
 
-    # Ubuntu 22.04 Server / Desktop
-    ./build.sh rockchip_rk3588s_tboard_ubuntu22_server_defconfig
-    ./build.sh rockchip_rk3588s_tboard_ubuntu22_desktop_defconfig
+    # Ubuntu 22.04 Server / GNOME Desktop
+    ./build.sh tboard-r5a_rk3588s_ubuntu_server_defconfig
+    ./build.sh tboard-r5a_rk3588s_ubuntu_gnome_defconfig
 
     ./build.sh ubuntu-server    # 或 ubuntu-desktop（显式命令切换形态）
     ./build.sh firmware
     # 或选好配置后一键完整构建
     ./build.sh all
 
-在 ubuntu/ 目录内直接构建（读同一份 config.local，不读 SDK menuconfig 选择）：
+在 ubuntu22.04/ 目录内直接构建（读同一份 config.local，不读 SDK menuconfig 选择）：
 
     cp config.example config.local    # 按需修改，如 UBUNTU_CONSOLE、UBUNTU_DESKTOP_GPU
     ./mk-image.sh --check             # 只读环境检查
@@ -50,11 +50,11 @@ PulseAudio、pavucontrol、gnome-control-center 等。板载 AIC8800 SDIO WiFi�
     rockdev/update.img                               最近打包的完整固件
 
 Server、Desktop 的 rootfs 分目录保存，互不覆盖；需保留多份完整固件时，切换版本前先复制 `update.img`。
-注意：独立运行 `ubuntu/mk-image.sh` 不会更新 `output/firmware/rootfs.img` 链接，
+注意：独立运行 `ubuntu22.04/mk-image.sh` 不会更新 `output/firmware/rootfs.img` 链接，
 打包前用 `readlink -f output/firmware/rootfs.img` 确认指向；走 SDK 的
 `./build.sh ubuntu-desktop` 构建则会同步该链接。
-构建中间目录在 `ubuntu/work/`，下载缓存在 `ubuntu/cache/`；
-确认无构建运行时可 `rm -rf ubuntu/work ubuntu/cache` 清理。
+构建中间目录在 `ubuntu22.04/work/`，下载缓存在 `ubuntu22.04/cache/`；
+确认无构建运行时可 `rm -rf ubuntu22.04/work ubuntu22.04/cache` 清理。
 
 ## 默认账号
 
@@ -63,8 +63,8 @@ Server、Desktop 的 rootfs 分目录保存，互不覆盖；需保留多份完�
 
 ## 自定义
 
-- 公共文件放 `ubuntu/overlay/`，版本专属放 `overlay-server/`、`overlay-desktop/`（目录结构与目标根目录一致，复制顺序：SDK 后处理 → 共用 → 版本专属）
-- 欢迎横幅模板：`overlay/etc/motd.template`；默认主机名 `TBoard-3588s`
+- 公共文件放 `ubuntu22.04/overlay/`，版本专属放 `overlay-server/`、`overlay-desktop/`（目录结构与目标根目录一致，复制顺序：SDK 后处理 → 共用 → 版本专属）
+- 欢迎横幅模板：`overlay/etc/motd.template`；主机名跟随所选 defconfig 的型号前缀（`tboard-r5a_...` → `TBoard-R5A`），可用 `UBUNTU_HOSTNAME` 覆盖
 - 镜像容量按内容自动计算，需能放入 `parameter-tboard.txt` 的 rootfs 分区（14 GiB）
 
 ## 上板快速检查

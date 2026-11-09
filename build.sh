@@ -8,8 +8,8 @@ SDK_DIR=$(dirname "$SCRIPT_DIR")
 usage()
 {
 	cat <<'EOF'
-Usage: ubuntu/build.sh [--check | <image directory>]
-  Standalone entry: cd ubuntu && ./mk-image.sh [--check | <image directory>]
+Usage: ubuntu22.04/build.sh [--check | <image directory>]
+  Standalone entry: cd ubuntu22.04 && ./mk-image.sh [--check | <image directory>]
   --check  Check host dependencies without downloading or building anything.
   Default image directories: output/ubuntu-jammy-<server|desktop>/images
   Normal SDK entry: ./build.sh ubuntu (uses the configured edition)
@@ -17,7 +17,7 @@ Usage: ubuntu/build.sh [--check | <image directory>]
   Standalone edition: RK_UBUNTU_FLAVOR=server|desktop (Desktop: GNOME + GDM3)
   Standalone release: RK_UBUNTU_VERSION=jammy (Ubuntu 22.04 only)
   Image size: calculated automatically from rootfs contents (same as Debian)
-  Local settings: ubuntu/config.local (see config.example)
+  Local settings: ubuntu22.04/config.local (see config.example)
 EOF
 }
 
@@ -41,6 +41,15 @@ UBUNTU_CONSOLE=${UBUNTU_CONSOLE:-ttyFIQ0}
 # SDK menuconfig wins for SDK builds. Standalone builds use config.local or
 # UBUNTU_DESKTOP_GPU; Ubuntu 22.04 Desktop defaults to Mali.
 UBUNTU_DESKTOP_GPU=${RK_UBUNTU_DESKTOP_GPU:-${UBUNTU_DESKTOP_GPU:-mali}}
+# Hostname follows the board model taken from the selected defconfig prefix
+# (tboard-r5a_rk3588s_... -> TBoard-R5A); standalone builds default to R5A.
+UBUNTU_MODEL=${RK_DEFCONFIG:-}
+UBUNTU_MODEL=${UBUNTU_MODEL%%_*}
+case "$UBUNTU_MODEL" in
+	tboard-*) UBUNTU_MODEL=${UBUNTU_MODEL#tboard-} ;;
+	*) UBUNTU_MODEL=r5a ;;
+esac
+UBUNTU_HOSTNAME=${UBUNTU_HOSTNAME:-TBoard-${UBUNTU_MODEL^^}}
 
 fail()
 {
@@ -73,13 +82,13 @@ if (( EUID != 0 )); then
 	command -v sudo >/dev/null || missing+=(sudo)
 fi
 if (( ${#missing[@]} )); then
-	fail "Missing tools: ${missing[*]}. See ubuntu/README.md for host packages."
+	fail "Missing tools: ${missing[*]}. See ubuntu22.04/README.md for host packages."
 fi
 
 HOST_ARCH=$(uname -m)
 BUILD_PREFIX=()
 [[ -r /usr/share/keyrings/ubuntu-archive-keyring.gpg ]] || fail "Install ubuntu-keyring on the host."
-[[ -r /usr/share/debootstrap/scripts/$RELEASE ]] || fail "Host debootstrap does not support $RELEASE; update debootstrap. See ubuntu/README.md."
+[[ -r /usr/share/debootstrap/scripts/$RELEASE ]] || fail "Host debootstrap does not support $RELEASE; update debootstrap. See ubuntu22.04/README.md."
 if [[ "$HOST_ARCH" != aarch64 ]]; then
 	command -v qemu-aarch64-static >/dev/null || fail "Install qemu-user-static."
 	BINFMT=/proc/sys/fs/binfmt_misc/qemu-aarch64
@@ -107,6 +116,7 @@ BUILD_ENV=(
 	"UBUNTU_USER=$UBUNTU_USER" "UBUNTU_PASSWORD=$UBUNTU_PASSWORD"
 	"UBUNTU_CONSOLE=$UBUNTU_CONSOLE"
 	"UBUNTU_DESKTOP_GPU=$UBUNTU_DESKTOP_GPU"
+	"UBUNTU_HOSTNAME=$UBUNTU_HOSTNAME"
 	"RK_SESSION=${RK_SESSION:-}"
 )
 

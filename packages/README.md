@@ -21,9 +21,9 @@ Mali 包最初取自 SDK Debian 同名 G610 g24p0 包，现为 Ubuntu 独立副�
 
 ```bash
 # 在 SDK 根目录执行；此命令仅导出已有文件，不编译。
-python3 ubuntu/package-xserver.py /path/to/previously-built-rootfs
+python3 ubuntu22.04/package-xserver.py /path/to/previously-built-rootfs
 # 替换包后更新 jammy 校验清单。
-(cd ubuntu/packages/jammy/arm64 && find xserver libmali -name '*.deb' -type f -print0 \
+(cd ubuntu22.04/packages/jammy/arm64 && find xserver libmali -name '*.deb' -type f -print0 \
     | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS)
 ```
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 [[ $EUID == 0 && $# == 1 ]] || {
-	echo "Use ubuntu/build.sh or the SDK's ./build.sh ubuntu" >&2
+	echo "Use ubuntu22.04/build.sh or the SDK's ./build.sh ubuntu" >&2
 	exit 1
 }
 
@@ -20,6 +20,8 @@ case "$FLAVOR" in
 	server | desktop) ;;
 	*) echo "Invalid Ubuntu edition: $FLAVOR" >&2; exit 1 ;;
 esac
+# Model-based hostname (TBoard-R5A for the r5a board); set via build.sh or env.
+UBUNTU_HOSTNAME=${UBUNTU_HOSTNAME:-TBoard-R5A}
 mkdir -p "$SCRIPT_DIR/work" "$SCRIPT_DIR/cache" "$IMAGE_DIR"
 exec 9>"$SCRIPT_DIR/work/build.lock"
 flock -n 9 || { echo "Another Ubuntu build is running." >&2; exit 1; }
@@ -144,6 +146,10 @@ fi
 # for example those on NetworkManager connections and SSH configuration.
 rsync -a --chown=0:0 --exclude=.empty "$SCRIPT_DIR/overlay/" "$ROOTFS/"
 rsync -a --chown=0:0 --exclude=.empty "$SCRIPT_DIR/overlay-$FLAVOR/" "$ROOTFS/"
+
+# Model-based hostname, applied after all overlays so it wins over the static
+# overlay and the SDK's <chip>-<os> default; setup-login.py syncs /etc/hosts.
+printf '%s\n' "$UBUNTU_HOSTNAME" > "$ROOTFS/etc/hostname"
 
 # Finalize branding after both overlays; never render the MOTD on the host.
 python3 "$SCRIPT_DIR/setup-login.py" "$ROOTFS"
